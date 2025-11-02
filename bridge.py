@@ -8,6 +8,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 import json
 import hashlib
+import argparse
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -17,6 +18,30 @@ app = Flask(__name__)
 QBITTORRENT_URL = "http://localhost:8080"
 QBITTORRENT_USERNAME = "admin"
 QBITTORRENT_PASSWORD = "password"
+
+# Verbosity levels:
+# 0 = Errors and warnings only
+# 1 = RPC operations (client actions) (-v)
+# 2 = Full debug (including qBittorrent API calls) (-vv)
+VERBOSITY = 0
+
+def log_error(message: str):
+    """Always print errors"""
+    print(f"[ERROR] {message}")
+
+def log_warning(message: str):
+    """Always print warnings"""
+    print(f"[WARNING] {message}")
+
+def log_info(message: str):
+    """Print info messages at verbosity level 1+ (RPC operations)"""
+    if VERBOSITY >= 1:
+        print(message)
+
+def log_debug(message: str):
+    """Print debug messages at verbosity level 2+ (QBT API calls)"""
+    if VERBOSITY >= 2:
+        print(message)
 
 # Session management
 qbt_session = requests.Session()
@@ -39,19 +64,19 @@ class QBittorrentClient:
             return True
 
         try:
-            print(f"[QBT] Attempting login to {self.url}")
+            log_debug(f"[QBT] Attempting login to {self.url}")
             response = self.session.post(
                 f"{self.url}/api/v2/auth/login",
                 data={"username": self.username, "password": self.password}
             )
             self.logged_in = response.text == "Ok."
             if self.logged_in:
-                print(f"[QBT] Login successful")
+                log_debug(f"[QBT] Login successful")
             else:
-                print(f"[QBT] Login failed: {response.text}")
+                log_error(f"[QBT] Login failed: {response.text}")
             return self.logged_in
         except Exception as e:
-            print(f"[QBT] Login error: {e}")
+            log_error(f"[QBT] Login error: {e}")
             return False
     
     def get_torrents(self, torrent_hash: Optional[str] = None) -> List[Dict]:
@@ -60,61 +85,61 @@ class QBittorrentClient:
         url = f"{self.url}/api/v2/torrents/info"
         if torrent_hash:
             url += f"?hashes={torrent_hash}"
-        print(f"[QBT] Getting torrents from: {url}")
+        log_debug(f"[QBT] Getting torrents from: {url}")
         response = self.session.get(url)
         if response.ok:
             torrents = response.json()
-            print(f"[QBT] Retrieved {len(torrents)} torrent(s)")
+            log_debug(f"[QBT] Retrieved {len(torrents)} torrent(s)")
             return torrents
         else:
-            print(f"[QBT] Failed to get torrents: {response.status_code}")
+            log_error(f"[QBT] Failed to get torrents: {response.status_code}")
             return []
     
     def get_torrent_properties(self, torrent_hash: str) -> Dict:
         """Get detailed torrent properties"""
         self.login()
-        print(f"[QBT] Getting properties for torrent: {torrent_hash}")
+        log_debug(f"[QBT] Getting properties for torrent: {torrent_hash}")
         response = self.session.get(
             f"{self.url}/api/v2/torrents/properties",
             params={"hash": torrent_hash}
         )
         if response.ok:
-            print(f"[QBT] Retrieved properties successfully")
+            log_debug(f"[QBT] Retrieved properties successfully")
             return response.json()
         else:
-            print(f"[QBT] Failed to get properties: {response.status_code}")
+            log_error(f"[QBT] Failed to get properties: {response.status_code}")
             return {}
     
     def get_torrent_trackers(self, torrent_hash: str) -> List[Dict]:
         """Get torrent trackers"""
         self.login()
-        print(f"[QBT] Getting trackers for torrent: {torrent_hash}")
+        log_debug(f"[QBT] Getting trackers for torrent: {torrent_hash}")
         response = self.session.get(
             f"{self.url}/api/v2/torrents/trackers",
             params={"hash": torrent_hash}
         )
         if response.ok:
             trackers = response.json()
-            print(f"[QBT] Retrieved {len(trackers)} tracker(s)")
+            log_debug(f"[QBT] Retrieved {len(trackers)} tracker(s)")
             return trackers
         else:
-            print(f"[QBT] Failed to get trackers: {response.status_code}")
+            log_error(f"[QBT] Failed to get trackers: {response.status_code}")
             return []
     
     def get_torrent_files(self, torrent_hash: str) -> List[Dict]:
         """Get torrent files"""
         self.login()
-        print(f"[QBT] Getting files for torrent: {torrent_hash}")
+        log_debug(f"[QBT] Getting files for torrent: {torrent_hash}")
         response = self.session.get(
             f"{self.url}/api/v2/torrents/files",
             params={"hash": torrent_hash}
         )
         if response.ok:
             files = response.json()
-            print(f"[QBT] Retrieved {len(files)} file(s)")
+            log_debug(f"[QBT] Retrieved {len(files)} file(s)")
             return files
         else:
-            print(f"[QBT] Failed to get files: {response.status_code}")
+            log_error(f"[QBT] Failed to get files: {response.status_code}")
             return []
     
     def add_torrent(self, **kwargs) -> bool:
@@ -134,23 +159,31 @@ class QBittorrentClient:
             data['savepath'] = kwargs['download_dir']
 
         if 'paused' in kwargs:
-            data['paused'] = 'true' if kwargs['paused'] else 'false'
+            # qBittorrent WebUI uses 'stopped' parameter (same logic as paused)
+            paused_value = kwargs['paused']
+            log_debug(f"[QBT] Paused parameter received: {paused_value} (type: {type(paused_value).__name__})")
+            # stopped should match paused (True = stopped, False = running)
+            data['stopped'] = 'true' if paused_value else 'false'
+            log_debug(f"[QBT] Setting stopped={data['stopped']}")
 
-        print(f"[QBT] Adding torrent with data: {data}")
+        log_debug(f"[QBT] Adding torrent with data: {data}")
         response = self.session.post(
             f"{self.url}/api/v2/torrents/add",
             data=data,
             files=files if files else None
         )
         success = response.text == "Ok."
-        print(f"[QBT] Add torrent result: {'Success' if success else 'Failed'} - {response.text}")
+        if success:
+            log_debug(f"[QBT] Add torrent result: Success")
+        else:
+            log_error(f"[QBT] Add torrent result: Failed - {response.text}")
         return success
     
     def start_torrents(self, hashes: List[str]) -> bool:
         """Start torrents"""
         self.login()
         hash_string = "|".join(hashes)
-        print(f"[QBT] Starting torrents: {hash_string}")
+        log_debug(f"[QBT] Starting torrents: {hash_string}")
 
         # Try different endpoint variations (ordered by most common first)
         endpoints = [
@@ -168,24 +201,24 @@ class QBittorrentClient:
                 response = self.session.post(url, data=data)
 
                 if response.ok:
-                    print(f"[QBT] Successfully started {len(hashes)} torrent(s)")
+                    log_debug(f"[QBT] Successfully started {len(hashes)} torrent(s)")
                     return True
                 elif response.status_code != 404:
                     # Got a response that's not 404, so endpoint exists but request failed
-                    print(f"[QBT] Failed to start torrents: {response.status_code} - {response.text}")
+                    log_error(f"[QBT] Failed to start torrents: {response.status_code} - {response.text}")
                     return False
             except Exception as e:
-                print(f"[QBT] Error with endpoint {endpoint}: {e}")
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
                 continue
 
-        print("[QBT] Could not start torrents - no valid API endpoint found")
+        log_error("[QBT] Could not start torrents - no valid API endpoint found")
         return False
     
     def stop_torrents(self, hashes: List[str]) -> bool:
         """Stop torrents"""
         self.login()
         hash_string = "|".join(hashes)
-        print(f"[QBT] Stopping torrents: {hash_string}")
+        log_debug(f"[QBT] Stopping torrents: {hash_string}")
 
         # Try different endpoint variations (ordered by most common first)
         endpoints = [
@@ -203,24 +236,24 @@ class QBittorrentClient:
                 response = self.session.post(url, data=data)
 
                 if response.ok:
-                    print(f"[QBT] Successfully stopped {len(hashes)} torrent(s)")
+                    log_debug(f"[QBT] Successfully stopped {len(hashes)} torrent(s)")
                     return True
                 elif response.status_code != 404:
                     # Got a response that's not 404, so endpoint exists but request failed
-                    print(f"[QBT] Failed to stop torrents: {response.status_code} - {response.text}")
+                    log_error(f"[QBT] Failed to stop torrents: {response.status_code} - {response.text}")
                     return False
             except Exception as e:
-                print(f"[QBT] Error with endpoint {endpoint}: {e}")
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
                 continue
 
-        print("[QBT] Could not stop torrents - no valid API endpoint found")
+        log_error("[QBT] Could not stop torrents - no valid API endpoint found")
         return False
     
     def remove_torrents(self, hashes: List[str], delete_data: bool = False) -> bool:
         """Remove torrents"""
         self.login()
         hash_string = "|".join(hashes)
-        print(f"[QBT] Removing torrents: {hash_string} (delete_data={delete_data})")
+        log_debug(f"[QBT] Removing torrents: {hash_string} (delete_data={delete_data})")
         response = self.session.post(
             f"{self.url}/api/v2/torrents/delete",
             data={
@@ -229,31 +262,31 @@ class QBittorrentClient:
             }
         )
         if response.ok:
-            print(f"[QBT] Successfully removed {len(hashes)} torrent(s)")
+            log_debug(f"[QBT] Successfully removed {len(hashes)} torrent(s)")
         else:
-            print(f"[QBT] Failed to remove torrents: {response.status_code} - {response.text}")
+            log_error(f"[QBT] Failed to remove torrents: {response.status_code} - {response.text}")
         return response.ok
     
     def verify_torrents(self, hashes: List[str]) -> bool:
         """Verify torrents"""
         self.login()
         hash_string = "|".join(hashes)
-        print(f"[QBT] Verifying torrents: {hash_string}")
+        log_debug(f"[QBT] Verifying torrents: {hash_string}")
         response = self.session.post(
             f"{self.url}/api/v2/torrents/recheck",
             data={"hashes": hash_string}
         )
         if response.ok:
-            print(f"[QBT] Successfully started verification for {len(hashes)} torrent(s)")
+            log_debug(f"[QBT] Successfully started verification for {len(hashes)} torrent(s)")
         else:
-            print(f"[QBT] Failed to verify torrents: {response.status_code} - {response.text}")
+            log_error(f"[QBT] Failed to verify torrents: {response.status_code} - {response.text}")
         return response.ok
     
     def set_torrent_location(self, hashes: List[str], location: str) -> bool:
         """Set torrent location (always moves files in qBittorrent)"""
         self.login()
         hash_string = "|".join(hashes)
-        print(f"[QBT] Setting location for torrents: {hash_string} to: {location}")
+        log_debug(f"[QBT] Setting location for torrents: {hash_string} to: {location}")
 
         # Try different endpoint variations
         endpoints = [
@@ -269,39 +302,39 @@ class QBittorrentClient:
                 response = self.session.post(url, data=data)
 
                 if response.ok:
-                    print(f"[QBT] Successfully set location for {len(hashes)} torrent(s)")
+                    log_debug(f"[QBT] Successfully set location for {len(hashes)} torrent(s)")
                     return True
                 elif response.status_code != 404:
                     # Got a response that's not 404, so endpoint exists but request failed
-                    print(f"[QBT] Failed to set location: {response.status_code} - {response.text}")
+                    log_error(f"[QBT] Failed to set location: {response.status_code} - {response.text}")
                     return False
             except Exception as e:
-                print(f"[QBT] Error with endpoint {endpoint}: {e}")
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
                 continue
 
-        print("[QBT] Could not set torrent location - no valid API endpoint found")
+        log_error("[QBT] Could not set torrent location - no valid API endpoint found")
         return False
     
     def reannounce_torrents(self, hashes: List[str]) -> bool:
         """Reannounce to trackers"""
         self.login()
         hash_string = "|".join(hashes)
-        print(f"[QBT] Reannouncing torrents: {hash_string}")
+        log_debug(f"[QBT] Reannouncing torrents: {hash_string}")
         response = self.session.post(
             f"{self.url}/api/v2/torrents/reannounce",
             data={"hashes": hash_string}
         )
         if response.ok:
-            print(f"[QBT] Successfully reannounced {len(hashes)} torrent(s)")
+            log_debug(f"[QBT] Successfully reannounced {len(hashes)} torrent(s)")
         else:
-            print(f"[QBT] Failed to reannounce torrents: {response.status_code} - {response.text}")
+            log_error(f"[QBT] Failed to reannounce torrents: {response.status_code} - {response.text}")
         return response.ok
 
     def add_trackers(self, torrent_hash: str, urls: List[str]) -> bool:
         """Add trackers to a torrent"""
         self.login()
         urls_string = "\n".join(urls)
-        print(f"[QBT] Adding trackers to torrent {torrent_hash}: {urls}")
+        log_debug(f"[QBT] Adding trackers to torrent {torrent_hash}: {urls}")
 
         # Try different endpoint variations
         endpoints = [
@@ -317,23 +350,23 @@ class QBittorrentClient:
                 response = self.session.post(url, data=data)
 
                 if response.ok:
-                    print(f"[QBT] Successfully added {len(urls)} tracker(s)")
+                    log_debug(f"[QBT] Successfully added {len(urls)} tracker(s)")
                     return True
                 elif response.status_code != 404:
-                    print(f"[QBT] Failed to add trackers: {response.status_code} - {response.text}")
+                    log_error(f"[QBT] Failed to add trackers: {response.status_code} - {response.text}")
                     return False
             except Exception as e:
-                print(f"[QBT] Error with endpoint {endpoint}: {e}")
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
                 continue
 
-        print("[QBT] Could not add trackers - no valid API endpoint found")
+        log_error("[QBT] Could not add trackers - no valid API endpoint found")
         return False
 
     def remove_trackers(self, torrent_hash: str, urls: List[str]) -> bool:
         """Remove trackers from a torrent"""
         self.login()
         urls_string = "|".join(urls)
-        print(f"[QBT] Removing trackers from torrent {torrent_hash}: {urls}")
+        log_debug(f"[QBT] Removing trackers from torrent {torrent_hash}: {urls}")
 
         # Try different endpoint variations
         endpoints = [
@@ -349,22 +382,22 @@ class QBittorrentClient:
                 response = self.session.post(url, data=data)
 
                 if response.ok:
-                    print(f"[QBT] Successfully removed {len(urls)} tracker(s)")
+                    log_debug(f"[QBT] Successfully removed {len(urls)} tracker(s)")
                     return True
                 elif response.status_code != 404:
-                    print(f"[QBT] Failed to remove trackers: {response.status_code} - {response.text}")
+                    log_error(f"[QBT] Failed to remove trackers: {response.status_code} - {response.text}")
                     return False
             except Exception as e:
-                print(f"[QBT] Error with endpoint {endpoint}: {e}")
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
                 continue
 
-        print("[QBT] Could not remove trackers - no valid API endpoint found")
+        log_error("[QBT] Could not remove trackers - no valid API endpoint found")
         return False
 
     def edit_tracker(self, torrent_hash: str, orig_url: str, new_url: str) -> bool:
         """Edit/replace a tracker URL"""
         self.login()
-        print(f"[QBT] Editing tracker for torrent {torrent_hash}: {orig_url} -> {new_url}")
+        log_debug(f"[QBT] Editing tracker for torrent {torrent_hash}: {orig_url} -> {new_url}")
 
         # Try different endpoint variations
         endpoints = [
@@ -380,17 +413,93 @@ class QBittorrentClient:
                 response = self.session.post(url, data=data)
 
                 if response.ok:
-                    print(f"[QBT] Successfully edited tracker")
+                    log_debug(f"[QBT] Successfully edited tracker")
                     return True
                 elif response.status_code != 404:
-                    print(f"[QBT] Failed to edit tracker: {response.status_code} - {response.text}")
+                    log_error(f"[QBT] Failed to edit tracker: {response.status_code} - {response.text}")
                     return False
             except Exception as e:
-                print(f"[QBT] Error with endpoint {endpoint}: {e}")
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
                 continue
 
-        print("[QBT] Could not edit tracker - no valid API endpoint found")
+        log_error("[QBT] Could not edit tracker - no valid API endpoint found")
         return False
+
+    def rename_torrent(self, torrent_hash: str, new_name: str) -> bool:
+        """Rename a torrent"""
+        self.login()
+        log_debug(f"[QBT] Renaming torrent {torrent_hash} to: {new_name}")
+
+        # Try different endpoint variations
+        endpoints = [
+            "/api/v2/torrents/rename",
+            "/command/rename"
+        ]
+
+        data = {"hash": torrent_hash, "name": new_name}
+
+        for endpoint in endpoints:
+            url = f"{self.url}{endpoint}"
+            try:
+                response = self.session.post(url, data=data)
+
+                if response.ok:
+                    log_debug(f"[QBT] Successfully renamed torrent")
+                    return True
+                elif response.status_code != 404:
+                    log_error(f"[QBT] Failed to rename torrent: {response.status_code} - {response.text}")
+                    return False
+            except Exception as e:
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
+                continue
+
+        log_error("[QBT] Could not rename torrent - no valid API endpoint found")
+        return False
+
+    def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> bool:
+        """Rename a file within a torrent"""
+        self.login()
+        log_debug(f"[QBT] Renaming file in torrent {torrent_hash}: {old_path} -> {new_path}")
+
+        # Try different endpoint variations
+        endpoints = [
+            "/api/v2/torrents/renameFile",
+            "/command/renameFile"
+        ]
+
+        data = {"hash": torrent_hash, "oldPath": old_path, "newPath": new_path}
+
+        for endpoint in endpoints:
+            url = f"{self.url}{endpoint}"
+            try:
+                response = self.session.post(url, data=data)
+
+                if response.ok:
+                    log_debug(f"[QBT] Successfully renamed file")
+                    return True
+                elif response.status_code != 404:
+                    log_error(f"[QBT] Failed to rename file: {response.status_code} - {response.text}")
+                    return False
+            except Exception as e:
+                log_debug(f"[QBT] Error with endpoint {endpoint}: {e}")
+                continue
+
+        log_error("[QBT] Could not rename file - no valid API endpoint found")
+        return False
+
+    def get_transfer_info(self) -> Dict:
+        """Get transfer and server statistics"""
+        self.login()
+        log_debug(f"[QBT] Getting server state from sync/maindata")
+        response = self.session.get(f"{self.url}/api/v2/sync/maindata?rid=0")
+        if response.ok:
+            data = response.json()
+            server_state = data.get('server_state', {})
+            log_debug(f"[QBT] Retrieved server state: {server_state}")
+            return server_state
+        else:
+            log_error(f"[QBT] Failed to get server state: {response.status_code}")
+            return {}
 
 
 class TransmissionTranslator:
@@ -601,9 +710,9 @@ class TransmissionTranslator:
                             hashes.append(torrent_hash)
                             break
                     else:
-                        print(f"Warning: Could not find torrent with Transmission ID {target_id}")
+                        log_warning(f"Could not find torrent with Transmission ID {target_id}")
                 except (ValueError, TypeError) as e:
-                    print(f"Error converting ID {id_val}: {e}")
+                    log_error(f"Error converting ID {id_val}: {e}")
                     # Try using it as-is as a fallback
                     hashes.append(str(id_val).lower())
 
@@ -624,10 +733,10 @@ def transmission_rpc():
         arguments = data.get('arguments', {})
         tag = data.get('tag')
 
-        print(f"\n[RPC] ===== Incoming Request =====")
-        print(f"[RPC] Method: {method}")
-        print(f"[RPC] Tag: {tag}")
-        print(f"[RPC] Arguments: {arguments}")
+        log_info(f"\n[RPC] ===== Incoming Request =====")
+        log_info(f"[RPC] Method: {method}")
+        log_debug(f"[RPC] Tag: {tag}")
+        log_debug(f"[RPC] Arguments: {arguments}")
 
         result = None
 
@@ -671,20 +780,26 @@ def transmission_rpc():
         elif method == 'torrent-tracker-replace':
             result = handle_tracker_replace(arguments)
 
+        elif method == 'torrent-rename-path':
+            result = handle_torrent_rename_path(arguments)
+
         elif method == 'session-get':
             result = handle_session_get(arguments)
 
         elif method == 'session-stats':
             result = handle_session_stats(arguments)
 
+        elif method == 'free-space':
+            result = handle_free_space(arguments)
+
         else:
-            print(f"[RPC] ERROR: Unknown method '{method}'")
+            log_error(f"Unknown method '{method}'")
             return jsonify({
                 'result': 'error',
                 'tag': tag
             })
 
-        print(f"[RPC] Response: success")
+        log_debug(f"[RPC] Response: success")
         return jsonify({
             'arguments': result,
             'result': 'success',
@@ -692,7 +807,7 @@ def transmission_rpc():
         })
 
     except Exception as e:
-        print(f"[RPC] ERROR: Exception during request handling: {e}")
+        log_error(f"Exception during request handling: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -703,12 +818,12 @@ def transmission_rpc():
 
 def handle_torrent_get(arguments: Dict) -> Dict:
     """Handle torrent-get method"""
-    print(f"[RPC] torrent-get")
+    log_info(f"[RPC] torrent-get")
     fields = arguments.get('fields', [])
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
 
-    print(f"[RPC] Requested fields: {fields if fields else 'all'}")
-    print(f"[RPC] Requested IDs: {ids if ids else 'all'}")
+    log_debug(f"[RPC] Requested fields: {fields if fields else 'all'}")
+    log_debug(f"[RPC] Requested IDs: {ids if ids else 'all'}")
 
     torrents = []
     qbt_torrents = qbt_client.get_torrents()
@@ -728,36 +843,36 @@ def handle_torrent_get(arguments: Dict) -> Dict:
 
             torrents.append(transmission_torrent)
 
-    print(f"[RPC] Returning {len(torrents)} torrent(s)")
+    log_debug(f"[RPC] Returning {len(torrents)} torrent(s)")
     return {'torrents': torrents}
 
 
 def handle_torrent_add(arguments: Dict) -> Dict:
     """Handle torrent-add method"""
-    print(f"[RPC] torrent-add")
+    log_info(f"[RPC] torrent-add")
     kwargs = {}
 
     if 'filename' in arguments:
         kwargs['filename'] = arguments['filename']
-        print(f"[RPC] Adding from URL: {arguments['filename']}")
+        log_debug(f"[RPC] Adding from URL: {arguments['filename']}")
 
     if 'metainfo' in arguments:
         import base64
         kwargs['torrent'] = base64.b64decode(arguments['metainfo'])
-        print(f"[RPC] Adding from metainfo (base64 decoded)")
+        log_debug(f"[RPC] Adding from metainfo (base64 decoded)")
 
     if 'download-dir' in arguments:
         kwargs['download_dir'] = arguments['download-dir']
-        print(f"[RPC] Download directory: {arguments['download-dir']}")
+        log_debug(f"[RPC] Download directory: {arguments['download-dir']}")
 
     if 'paused' in arguments:
         kwargs['paused'] = arguments['paused']
-        print(f"[RPC] Paused: {arguments['paused']}")
+        log_debug(f"[RPC] Paused: {arguments['paused']}")
 
     success = qbt_client.add_torrent(**kwargs)
 
     if success:
-        print(f"[RPC] Torrent added successfully")
+        log_info(f"[RPC] Torrent added successfully")
         # Get the newly added torrent
         torrents = qbt_client.get_torrents()
         if torrents:
@@ -767,74 +882,75 @@ def handle_torrent_add(arguments: Dict) -> Dict:
             )
             return {'torrent-added': transmission_torrent}
     else:
-        print(f"[RPC] Failed to add torrent")
+        log_error(f"Failed to add torrent")
 
     return {}
 
 
 def handle_torrent_start(arguments: Dict) -> Dict:
     """Handle torrent-start method"""
-    print(f"[RPC] torrent-start")
+    log_info(f"[RPC] torrent-start")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     if ids:
         qbt_client.start_torrents(ids)
     else:
-        print("[RPC] Warning: No valid torrent IDs provided for start")
+        log_warning("No valid torrent IDs provided for start")
     return {}
 
 
 def handle_torrent_stop(arguments: Dict) -> Dict:
     """Handle torrent-stop method"""
-    print(f"[RPC] torrent-stop")
+    log_info(f"[RPC] torrent-stop")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     if ids:
         qbt_client.stop_torrents(ids)
     else:
-        print("[RPC] Warning: No valid torrent IDs provided for stop")
+        log_warning("No valid torrent IDs provided for stop")
     return {}
 
 
 def handle_torrent_verify(arguments: Dict) -> Dict:
     """Handle torrent-verify method"""
-    print(f"[RPC] torrent-verify")
+    log_info(f"[RPC] torrent-verify")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     if ids:
         qbt_client.verify_torrents(ids)
     else:
-        print("[RPC] Warning: No valid torrent IDs provided for verify")
+        log_warning("No valid torrent IDs provided for verify")
     return {}
 
 
 def handle_torrent_reannounce(arguments: Dict) -> Dict:
     """Handle torrent-reannounce method"""
-    print(f"[RPC] torrent-reannounce")
+    log_info(f"[RPC] torrent-reannounce")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     if ids:
         qbt_client.reannounce_torrents(ids)
     else:
-        print("[RPC] Warning: No valid torrent IDs provided for reannounce")
+        log_warning("No valid torrent IDs provided for reannounce")
     return {}
 
 
 def handle_torrent_set(arguments: Dict) -> Dict:
     """Handle torrent-set method"""
-    print(f"[RPC] torrent-set: {arguments}")
+    log_info(f"[RPC] torrent-set")
+    log_debug(f"[RPC] Arguments: {arguments}")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
 
     if not ids:
-        print("[RPC] Warning: No valid torrent IDs provided for torrent-set")
+        log_warning("No valid torrent IDs provided for torrent-set")
         return {}
 
     # Handle tracker operations
     if 'trackerAdd' in arguments:
         trackers = arguments['trackerAdd']
-        print(f"[RPC] trackerAdd detected: {trackers}")
+        log_debug(f"[RPC] trackerAdd detected: {trackers}")
         for torrent_hash in ids:
             qbt_client.add_trackers(torrent_hash, trackers)
 
     if 'trackerRemove' in arguments:
         tracker_ids = arguments['trackerRemove']
-        print(f"[RPC] trackerRemove detected: {tracker_ids}")
+        log_debug(f"[RPC] trackerRemove detected: {tracker_ids}")
         # In Transmission, trackerRemove contains tracker IDs (integers)
         for torrent_hash in ids:
             trackers = qbt_client.get_torrent_trackers(torrent_hash)
@@ -846,7 +962,7 @@ def handle_torrent_set(arguments: Dict) -> Dict:
                     if tracker.get('tier') == tracker_id and tracker.get('url'):
                         if tracker['url'] not in ['** [DHT] **', '** [PeX] **', '** [LSD] **']:
                             urls_to_remove.append(tracker['url'])
-                            print(f"[RPC] Will remove tracker ID {tracker_id}: {tracker['url']}")
+                            log_debug(f"[RPC] Will remove tracker ID {tracker_id}: {tracker['url']}")
                         break
 
             if urls_to_remove:
@@ -854,15 +970,15 @@ def handle_torrent_set(arguments: Dict) -> Dict:
 
     if 'trackerReplace' in arguments:
         tracker_replace = arguments['trackerReplace']
-        print(f"[RPC] trackerReplace detected: {tracker_replace}")
+        log_debug(f"[RPC] trackerReplace detected: {tracker_replace}")
 
         if not tracker_replace or len(tracker_replace) < 2:
-            print("[RPC] Warning: Invalid trackerReplace format, expected [tracker_id, new_url]")
+            log_warning("Invalid trackerReplace format, expected [tracker_id, new_url]")
             return {}
 
         tracker_id = tracker_replace[0]
         new_url = tracker_replace[1]
-        print(f"[RPC] Replacing tracker ID {tracker_id} with: {new_url}")
+        log_debug(f"[RPC] Replacing tracker ID {tracker_id} with: {new_url}")
 
         # Replace tracker for each torrent
         for torrent_hash in ids:
@@ -873,7 +989,7 @@ def handle_torrent_set(arguments: Dict) -> Dict:
                 if tracker.get('tier') == tracker_id and tracker.get('url'):
                     old_url = tracker['url']
                     if old_url not in ['** [DHT] **', '** [PeX] **', '** [LSD] **']:
-                        print(f"[RPC] Found tracker to replace: {old_url}")
+                        log_debug(f"[RPC] Found tracker to replace: {old_url}")
                         qbt_client.edit_tracker(torrent_hash, old_url, new_url)
                     break
 
@@ -885,37 +1001,38 @@ def handle_torrent_set(arguments: Dict) -> Dict:
 
 def handle_torrent_remove(arguments: Dict) -> Dict:
     """Handle torrent-remove method"""
-    print(f"[RPC] torrent-remove")
+    log_info(f"[RPC] torrent-remove")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     delete_data = arguments.get('delete-local-data', False)
-    print(f"[RPC] Delete local data: {delete_data}")
+    log_debug(f"[RPC] Delete local data: {delete_data}")
 
     if ids:
         qbt_client.remove_torrents(ids, delete_data)
     else:
-        print("[RPC] Warning: No valid torrent IDs provided for remove")
+        log_warning("No valid torrent IDs provided for remove")
     return {}
 
 
 def handle_torrent_set_location(arguments: Dict) -> Dict:
     """Handle torrent-set-location method"""
-    print(f"[RPC] torrent-set-location: {arguments}")
+    log_info(f"[RPC] torrent-set-location")
+    log_debug(f"[RPC] Arguments: {arguments}")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     location = arguments.get('location', '')
     move = arguments.get('move', True)  # Transmission default is True
 
     if not ids:
-        print("[RPC] Warning: No torrent IDs provided for set-location")
+        log_warning("No torrent IDs provided for set-location")
         return {}
 
     if not location:
-        print("[RPC] Warning: No location provided for set-location")
+        log_warning("No location provided for set-location")
         return {}
 
     # Note: qBittorrent's setLocation always moves files
     # If move=False in Transmission, this is a mismatch in behavior
     if not move:
-        print("[RPC] Warning: qBittorrent always moves files. 'move=false' not supported")
+        log_warning("qBittorrent always moves files. 'move=false' not supported")
 
     qbt_client.set_torrent_location(ids, location)
     return {}
@@ -923,16 +1040,17 @@ def handle_torrent_set_location(arguments: Dict) -> Dict:
 
 def handle_tracker_add(arguments: Dict) -> Dict:
     """Handle torrent-tracker-add method (Transmission: trackerAdd)"""
-    print(f"[RPC] tracker-add: {arguments}")
+    log_info(f"[RPC] tracker-add")
+    log_debug(f"[RPC] Arguments: {arguments}")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     trackers = arguments.get('trackerAdd', [])
 
     if not ids:
-        print("[RPC] Warning: No torrent IDs provided for tracker-add")
+        log_warning("No torrent IDs provided for tracker-add")
         return {}
 
     if not trackers:
-        print("[RPC] Warning: No trackers provided for tracker-add")
+        log_warning("No trackers provided for tracker-add")
         return {}
 
     # Add trackers to each torrent
@@ -944,16 +1062,17 @@ def handle_tracker_add(arguments: Dict) -> Dict:
 
 def handle_tracker_remove(arguments: Dict) -> Dict:
     """Handle torrent-tracker-remove method (Transmission: trackerRemove)"""
-    print(f"[RPC] tracker-remove: {arguments}")
+    log_info(f"[RPC] tracker-remove")
+    log_debug(f"[RPC] Arguments: {arguments}")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     tracker_ids = arguments.get('trackerRemove', [])
 
     if not ids:
-        print("[RPC] Warning: No torrent IDs provided for tracker-remove")
+        log_warning("No torrent IDs provided for tracker-remove")
         return {}
 
     if not tracker_ids:
-        print("[RPC] Warning: No tracker IDs provided for tracker-remove")
+        log_warning("No tracker IDs provided for tracker-remove")
         return {}
 
     # In Transmission, trackerRemove contains tracker IDs (integers)
@@ -977,16 +1096,17 @@ def handle_tracker_remove(arguments: Dict) -> Dict:
 
 def handle_tracker_replace(arguments: Dict) -> Dict:
     """Handle torrent-tracker-replace method (Transmission: trackerReplace)"""
-    print(f"[RPC] tracker-replace: {arguments}")
+    log_info(f"[RPC] tracker-replace")
+    log_debug(f"[RPC] Arguments: {arguments}")
     ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
     tracker_replace = arguments.get('trackerReplace', [])
 
     if not ids:
-        print("[RPC] Warning: No torrent IDs provided for tracker-replace")
+        log_warning("No torrent IDs provided for tracker-replace")
         return {}
 
     if not tracker_replace or len(tracker_replace) < 2:
-        print("[RPC] Warning: Invalid trackerReplace format, expected [tracker_id, new_url]")
+        log_warning("Invalid trackerReplace format, expected [tracker_id, new_url]")
         return {}
 
     tracker_id = tracker_replace[0]
@@ -1004,6 +1124,48 @@ def handle_tracker_replace(arguments: Dict) -> Dict:
                 break
 
     return {}
+
+
+def handle_torrent_rename_path(arguments: Dict) -> Dict:
+    """Handle torrent-rename-path method"""
+    log_info(f"[RPC] torrent-rename-path")
+    log_debug(f"[RPC] Arguments: {arguments}")
+    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    path = arguments.get('path', '')
+    name = arguments.get('name', '')
+
+    if not ids:
+        log_warning("No torrent IDs provided for rename-path")
+        return {}
+
+    if not name:
+        log_warning("No new name provided for rename-path")
+        return {}
+
+    # In Transmission, 'path' is the current name, 'name' is the new name
+    # We need to determine if we're renaming the torrent itself or a file within it
+    for torrent_hash in ids:
+        # Get torrent info to check if path matches the torrent name (root)
+        qbt_torrents = qbt_client.get_torrents(torrent_hash)
+        if not qbt_torrents:
+            log_warning(f"Could not find torrent with hash {torrent_hash}")
+            continue
+
+        qbt_torrent = qbt_torrents[0]
+        torrent_name = qbt_torrent.get('name', '')
+
+        # Check if we're renaming the torrent itself
+        # This happens when path matches the torrent name or is the root directory
+        if path == torrent_name or not path or path == '.':
+            # Rename the torrent itself
+            log_debug(f"[RPC] Renaming torrent from '{torrent_name}' to '{name}'")
+            qbt_client.rename_torrent(torrent_hash, name)
+        else:
+            # Rename a file/folder within the torrent
+            log_debug(f"[RPC] Renaming file/folder '{path}' to '{name}'")
+            qbt_client.rename_file(torrent_hash, path, name)
+
+    return {'path': path, 'name': name}
 
 
 def handle_session_get(arguments: Dict) -> Dict:
@@ -1069,31 +1231,116 @@ def handle_session_get(arguments: Dict) -> Dict:
 
 def handle_session_stats(arguments: Dict) -> Dict:
     """Handle session-stats method"""
+    log_info(f"[RPC] session-stats")
+
+    # Get server state from qBittorrent (includes all-time and session stats)
+    server_state = qbt_client.get_transfer_info()
+
+    # Get all torrents to count active/paused/total
+    torrents = qbt_client.get_torrents()
+
+    active_count = 0
+    paused_count = 0
+
+    for torrent in torrents:
+        state = torrent.get('state', '')
+        if state in ['pausedDL', 'pausedUP']:
+            paused_count += 1
+        elif state in ['downloading', 'uploading', 'stalledDL', 'stalledUP', 'metaDL', 'queuedDL', 'queuedUP']:
+            active_count += 1
+
+    total_count = len(torrents)
+
+    # Get current speeds
+    download_speed = server_state.get('dl_info_speed', 0)
+    upload_speed = server_state.get('up_info_speed', 0)
+
+    # Get session statistics
+    session_downloaded = server_state.get('dl_info_data', 0)
+    session_uploaded = server_state.get('up_info_data', 0)
+
+    # Get all-time statistics
+    alltime_downloaded = server_state.get('alltime_dl', 0)
+    alltime_uploaded = server_state.get('alltime_ul', 0)
+
+    log_debug(f"[RPC] Stats - Active: {active_count}, Paused: {paused_count}, Total: {total_count}")
+    log_debug(f"[RPC] Session: DL={session_downloaded} bytes, UL={session_uploaded} bytes")
+    log_debug(f"[RPC] All-time: DL={alltime_downloaded} bytes, UL={alltime_uploaded} bytes")
+
     return {
-        'activeTorrentCount': 0,
-        'downloadSpeed': 0,
-        'pausedTorrentCount': 0,
-        'torrentCount': 0,
-        'uploadSpeed': 0,
+        'activeTorrentCount': active_count,
+        'downloadSpeed': download_speed,
+        'pausedTorrentCount': paused_count,
+        'torrentCount': total_count,
+        'uploadSpeed': upload_speed,
         'cumulative-stats': {
-            'downloadedBytes': 0,
-            'filesAdded': 0,
-            'secondsActive': 0,
-            'sessionCount': 1,
-            'uploadedBytes': 0
+            'downloadedBytes': alltime_downloaded,
+            'filesAdded': 0,  # qBittorrent doesn't track this
+            'secondsActive': 0,  # qBittorrent doesn't track this
+            'sessionCount': 1,  # qBittorrent doesn't track this
+            'uploadedBytes': alltime_uploaded
         },
         'current-stats': {
-            'downloadedBytes': 0,
-            'filesAdded': 0,
-            'secondsActive': 0,
-            'sessionCount': 1,
-            'uploadedBytes': 0
+            'downloadedBytes': session_downloaded,
+            'filesAdded': total_count,
+            'secondsActive': 0,  # qBittorrent doesn't track this
+            'sessionCount': 1,  # Current session
+            'uploadedBytes': session_uploaded
         }
     }
 
 
-if __name__ == '__main__':
-    print("Starting qBittorrent to Transmission RPC translation layer...")
+def handle_free_space(arguments: Dict) -> Dict:
+    """Handle free-space method"""
+    log_info(f"[RPC] free-space")
+    path = arguments.get('path', '')
+    log_debug(f"[RPC] Requested path: {path}")
+
+    # Get server state which includes free_space_on_disk
+    server_state = qbt_client.get_transfer_info()
+    free_space = server_state.get('free_space_on_disk', 0)
+
+    log_debug(f"[RPC] Free space: {free_space} bytes")
+
+    return {
+        'path': path,
+        'size-bytes': free_space
+    }
+
+
+def main():
+    global VERBOSITY
+
+    parser = argparse.ArgumentParser(
+        description='qBittorrent to Transmission RPC Bridge',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Verbosity levels:
+  (none)  - Errors and warnings only
+  -v      - Show RPC operations (client actions)
+  -vv     - Full debug (including qBittorrent API calls)
+        '''
+    )
+    parser.add_argument('-v', '--verbose', action='count', default=0,
+                       help='Increase verbosity (-v for info, -vv for debug)')
+    parser.add_argument('--host', default='0.0.0.0',
+                       help='Host to bind to (default: 0.0.0.0)')
+    parser.add_argument('--port', type=int, default=9091,
+                       help='Port to listen on (default: 9091)')
+
+    args = parser.parse_args()
+
+    # Set global verbosity level
+    VERBOSITY = min(args.verbose, 2)  # Cap at level 2
+
+    print("Starting qBittorrent to Transmission RPC Bridge")
+    print(f"Verbosity level: {VERBOSITY} {'(errors/warnings only)' if VERBOSITY == 0 else '(info)' if VERBOSITY == 1 else '(full debug)'}")
     print(f"Connecting to qBittorrent at: {QBITTORRENT_URL}")
-    print("Listening on http://localhost:9091/transmission/rpc")
-    app.run(host='0.0.0.0', port=9091, debug=True)
+    print(f"Listening on http://{args.host}:{args.port}/transmission/rpc")
+    print()
+
+    app.run(host=args.host, port=args.port, debug=False)
+
+
+if __name__ == '__main__':
+    main()
