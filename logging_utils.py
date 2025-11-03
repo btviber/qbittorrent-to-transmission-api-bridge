@@ -5,7 +5,8 @@ Logging utilities for the qBittorrent to Transmission RPC bridge
 # Verbosity levels:
 # 0 = Errors and warnings only
 # 1 = RPC operations (client actions) (-v)
-# 2 = Full debug (including qBittorrent API calls) (-vv)
+# 2 = Important debug (cache hits/misses, API calls) (-vv)
+# 3 = Full trace (sync changes, arguments, all details) (-vvv)
 VERBOSITY = 0
 
 
@@ -32,6 +33,12 @@ def log_info(message: str):
 
 
 def log_debug(message: str):
-    """Print debug messages at verbosity level 2+ (QBT API calls)"""
+    """Print debug messages at verbosity level 2+ (cache, API calls)"""
     if VERBOSITY >= 2:
+        print(message)
+
+
+def log_trace(message: str):
+    """Print trace messages at verbosity level 3+ (sync changes, arguments)"""
+    if VERBOSITY >= 3:
         print(message)

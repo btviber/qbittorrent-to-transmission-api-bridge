@@ -337,3 +337,14 @@ class QBittorrentClient:
         else:
             log_error(f"[QBT] Failed to get server state: {response.status_code}")
             return {}
+
+    def get_sync_maindata(self, rid: int = 0) -> Dict:
+        """Get sync maindata with optional rid for incremental updates"""
+        self.login()
+        log_debug(f"[QBT] Getting sync/maindata with rid={rid}")
+        response = self.session.get(f"{self.url}/api/v2/sync/maindata?rid={rid}")
+        if response.ok:
+            return response.json()
+        else:
+            log_error(f"[QBT] Failed to get sync/maindata: {response.status_code}")
+            return {}

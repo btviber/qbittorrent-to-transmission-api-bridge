@@ -30,18 +30,44 @@ class TransmissionTranslator:
     }
 
     @staticmethod
-    def qbt_to_transmission_torrent(qbt_torrent: Dict, qbt_client: QBittorrentClient, sequential_id: int) -> Dict:
-        """Convert qBittorrent torrent to Transmission format"""
+    def qbt_to_transmission_torrent(qbt_torrent: Dict, qbt_client: QBittorrentClient, sequential_id: int,
+                                     requested_fields: List[str] = None, sync_manager=None) -> Dict:
+        """Convert qBittorrent torrent to Transmission format
+
+        Args:
+            qbt_torrent: Torrent data from sync API (contains most fields)
+            qbt_client: Client for fetching additional data if needed (deprecated, use sync_manager)
+            sequential_id: Sequential torrent ID (1, 2, 3, ...)
+            requested_fields: List of fields requested by client (None = all fields)
+            sync_manager: Sync manager for cached detail fetching
+        """
 
         torrent_hash = qbt_torrent['hash']
-        properties = qbt_client.get_torrent_properties(torrent_hash)
-        trackers = qbt_client.get_torrent_trackers(torrent_hash)
-        files = qbt_client.get_torrent_files(torrent_hash)
 
-        log_debug(f"[FILES] Torrent {qbt_torrent.get('name', 'unknown')} (hash: {torrent_hash[:8]}...) returned {len(files)} file(s)")
+        # Check what additional data we need based on requested fields
+        need_files = requested_fields is None or any(f in requested_fields for f in ['files', 'fileStats', 'priorities', 'wanted'])
+        need_trackers = requested_fields is None or 'trackerStats' in requested_fields or 'trackers' in requested_fields
+        need_properties = requested_fields is None or any(f in requested_fields for f in ['creator', 'dateCreated', 'comment', 'pieceCount', 'pieceSize'])
+
+        # Get cached details if sync_manager is available, otherwise fallback to direct API
+        if sync_manager:
+            details = sync_manager.get_torrent_details(
+                torrent_hash,
+                need_files=need_files,
+                need_trackers=need_trackers,
+                need_properties=need_properties
+            )
+            files = details['files']
+            trackers = details['trackers']
+            properties = details['properties']
+        else:
+            # Fallback to direct API calls (for backward compatibility)
+            properties = qbt_client.get_torrent_properties(torrent_hash) if need_properties else {}
+            trackers = qbt_client.get_torrent_trackers(torrent_hash) if need_trackers else []
+            files = qbt_client.get_torrent_files(torrent_hash) if need_files else []
+
         if files:
-            for idx, f in enumerate(files):
-                log_debug(f"[FILES]   File {idx}: {f.get('name', 'unknown')} - size: {f.get('size', 0)}, priority: {f.get('priority', -1)}")
+            log_debug(f"[FILES] Torrent {qbt_torrent.get('name', 'unknown')} (hash: {torrent_hash[:8]}...) returned {len(files)} file(s)")
 
         # Calculate rates
         download_rate = qbt_torrent.get('dlspeed', 0)
