@@ -41,12 +41,13 @@ qbt_client = QBittorrentClient(QBITTORRENT_URL, QBITTORRENT_USERNAME, QBITTORREN
 set_qbt_client(qbt_client)
 
 
-@app.route('/transmission/rpc', methods=['POST'])
+@app.route('/transmission/rpc', methods=['POST'], strict_slashes=False)
 def transmission_rpc():
     """Main Transmission RPC endpoint"""
 
     try:
-        data = request.get_json()
+        # Force JSON parsing even if Content-Type header is not set correctly
+        data = request.get_json(force=True)
         method = data.get('method', '')
         arguments = data.get('arguments', {})
         tag = data.get('tag')
@@ -112,26 +113,30 @@ def transmission_rpc():
 
         else:
             log_error(f"Unknown method '{method}'")
-            return jsonify({
-                'result': 'error',
-                'tag': tag
-            })
+            response = {'result': 'error'}
+            if tag is not None:
+                response['tag'] = tag
+            return jsonify(response)
 
         log_debug(f"[RPC] Response: success")
-        return jsonify({
+        response = {
             'arguments': result,
-            'result': 'success',
-            'tag': tag
-        })
+            'result': 'success'
+        }
+        # Only include tag if it was provided (match real Transmission behavior)
+        if tag is not None:
+            response['tag'] = tag
+        return jsonify(response)
 
     except Exception as e:
         log_error(f"Exception during request handling: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({
-            'result': str(e),
-            'tag': data.get('tag') if 'data' in locals() else None
-        }), 500
+        response = {'result': str(e)}
+        tag = data.get('tag') if 'data' in locals() else None
+        if tag is not None:
+            response['tag'] = tag
+        return jsonify(response), 500
 
 
 def main():

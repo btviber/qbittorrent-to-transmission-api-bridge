@@ -303,6 +303,27 @@ class QBittorrentClient:
             log_error(f"[QBT] Failed to rename file: {response.status_code} - {response.text}")
         return response.ok
 
+    def set_file_priority(self, torrent_hash: str, file_ids: List[int], priority: int) -> bool:
+        """Set file priority
+
+        Args:
+            torrent_hash: Torrent hash
+            file_ids: List of file indices
+            priority: 0=do not download, 1=normal, 6=high, 7=maximal
+        """
+        self.login()
+        id_string = "|".join(str(fid) for fid in file_ids)
+        log_debug(f"[QBT] Setting file priority for torrent {torrent_hash}, files {id_string} to priority {priority}")
+        response = self.session.post(
+            f"{self.url}/api/v2/torrents/filePrio",
+            data={"hash": torrent_hash, "id": id_string, "priority": priority}
+        )
+        if response.ok:
+            log_debug(f"[QBT] Successfully set file priority")
+        else:
+            log_error(f"[QBT] Failed to set file priority: {response.status_code} - {response.text}")
+        return response.ok
+
     def get_transfer_info(self) -> Dict:
         """Get transfer and server statistics"""
         self.login()

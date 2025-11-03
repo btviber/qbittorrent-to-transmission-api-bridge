@@ -3,7 +3,7 @@ RPC Method Handlers for Transmission to qBittorrent translation
 """
 
 import base64
-from typing import Dict
+from typing import Dict, List
 from qbittorrent_client import QBittorrentClient
 from transmission_translator import TransmissionTranslator
 from logging_utils import log_info, log_debug, log_warning, log_error
@@ -19,23 +19,40 @@ def set_qbt_client(client: QBittorrentClient):
     qbt_client = client
 
 
+def get_sorted_torrents() -> List[Dict]:
+    """Get all torrents sorted by hash for consistent ID assignment"""
+    torrents = qbt_client.get_torrents()
+    return sorted(torrents, key=lambda t: t['hash'])
+
+
 def handle_torrent_get(arguments: Dict) -> Dict:
     """Handle torrent-get method"""
     log_info(f"[RPC] torrent-get")
+    log_debug(f"[RPC] Raw arguments IDs: {arguments.get('ids', 'not specified')}")
     fields = arguments.get('fields', [])
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+
+    # Get all torrents and sort by hash for consistent ordering
+    sorted_torrents = get_sorted_torrents()
+
+    ids = TransmissionTranslator.get_torrent_ids(arguments, sorted_torrents)
 
     log_debug(f"[RPC] Requested fields: {fields if fields else 'all'}")
-    log_debug(f"[RPC] Requested IDs: {ids if ids else 'all'}")
+    log_debug(f"[RPC] Requested IDs (after translation): {ids if ids else 'all'}")
 
     torrents = []
-    qbt_torrents = qbt_client.get_torrents()
 
-    for qbt_torrent in qbt_torrents:
+    for idx, qbt_torrent in enumerate(sorted_torrents):
+        # ids is None means return all torrents
+        # ids is non-empty list means return only matching torrents
         if ids is None or qbt_torrent['hash'] in ids:
+            # Sequential ID is 1-based position in sorted list
+            sequential_id = idx + 1
             transmission_torrent = TransmissionTranslator.qbt_to_transmission_torrent(
-                qbt_torrent, qbt_client
+                qbt_torrent, qbt_client, sequential_id
             )
+
+            # Debug: Log what ID we're sending to client
+            log_debug(f"[RPC] Sending torrent to client: name='{qbt_torrent.get('name', 'unknown')}', hash={qbt_torrent['hash'][:8]}..., sequential_id={sequential_id}, literal_id={int(qbt_torrent['hash'][:8], 16)}")
 
             # Filter fields if specified
             if fields:
@@ -92,7 +109,7 @@ def handle_torrent_add(arguments: Dict) -> Dict:
 def handle_torrent_start(arguments: Dict) -> Dict:
     """Handle torrent-start method"""
     log_info(f"[RPC] torrent-start")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     if ids:
         qbt_client.start_torrents(ids)
     else:
@@ -103,7 +120,7 @@ def handle_torrent_start(arguments: Dict) -> Dict:
 def handle_torrent_stop(arguments: Dict) -> Dict:
     """Handle torrent-stop method"""
     log_info(f"[RPC] torrent-stop")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     if ids:
         qbt_client.stop_torrents(ids)
     else:
@@ -114,7 +131,7 @@ def handle_torrent_stop(arguments: Dict) -> Dict:
 def handle_torrent_verify(arguments: Dict) -> Dict:
     """Handle torrent-verify method"""
     log_info(f"[RPC] torrent-verify")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     if ids:
         qbt_client.verify_torrents(ids)
     else:
@@ -125,7 +142,7 @@ def handle_torrent_verify(arguments: Dict) -> Dict:
 def handle_torrent_reannounce(arguments: Dict) -> Dict:
     """Handle torrent-reannounce method"""
     log_info(f"[RPC] torrent-reannounce")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     if ids:
         qbt_client.reannounce_torrents(ids)
     else:
@@ -137,7 +154,7 @@ def handle_torrent_set(arguments: Dict) -> Dict:
     """Handle torrent-set method"""
     log_info(f"[RPC] torrent-set")
     log_debug(f"[RPC] Arguments: {arguments}")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
 
     if not ids:
         log_warning("No valid torrent IDs provided for torrent-set")
@@ -195,6 +212,37 @@ def handle_torrent_set(arguments: Dict) -> Dict:
                         qbt_client.edit_tracker(torrent_hash, old_url, new_url)
                     break
 
+    # Handle file priority changes
+    if 'files-unwanted' in arguments:
+        file_indices = arguments['files-unwanted']
+        log_debug(f"[RPC] files-unwanted detected: {file_indices}")
+        for torrent_hash in ids:
+            qbt_client.set_file_priority(torrent_hash, file_indices, 0)  # 0 = do not download
+
+    if 'files-wanted' in arguments:
+        file_indices = arguments['files-wanted']
+        log_debug(f"[RPC] files-wanted detected: {file_indices}")
+        for torrent_hash in ids:
+            qbt_client.set_file_priority(torrent_hash, file_indices, 1)  # 1 = normal priority
+
+    if 'priority-high' in arguments:
+        file_indices = arguments['priority-high']
+        log_debug(f"[RPC] priority-high detected: {file_indices}")
+        for torrent_hash in ids:
+            qbt_client.set_file_priority(torrent_hash, file_indices, 6)  # 6 = high priority
+
+    if 'priority-low' in arguments:
+        file_indices = arguments['priority-low']
+        log_debug(f"[RPC] priority-low detected: {file_indices}")
+        for torrent_hash in ids:
+            qbt_client.set_file_priority(torrent_hash, file_indices, 1)  # 1 = normal (qBT doesn't have "low")
+
+    if 'priority-normal' in arguments:
+        file_indices = arguments['priority-normal']
+        log_debug(f"[RPC] priority-normal detected: {file_indices}")
+        for torrent_hash in ids:
+            qbt_client.set_file_priority(torrent_hash, file_indices, 1)  # 1 = normal
+
     # Handle other torrent-set operations
     # TODO: Implement other settings like speed limits, peer limits, etc.
 
@@ -204,7 +252,7 @@ def handle_torrent_set(arguments: Dict) -> Dict:
 def handle_torrent_remove(arguments: Dict) -> Dict:
     """Handle torrent-remove method"""
     log_info(f"[RPC] torrent-remove")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     delete_data = arguments.get('delete-local-data', False)
     log_debug(f"[RPC] Delete local data: {delete_data}")
 
@@ -219,7 +267,7 @@ def handle_torrent_set_location(arguments: Dict) -> Dict:
     """Handle torrent-set-location method"""
     log_info(f"[RPC] torrent-set-location")
     log_debug(f"[RPC] Arguments: {arguments}")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     location = arguments.get('location', '')
     move = arguments.get('move', True)  # Transmission default is True
 
@@ -244,7 +292,7 @@ def handle_tracker_add(arguments: Dict) -> Dict:
     """Handle torrent-tracker-add method (Transmission: trackerAdd)"""
     log_info(f"[RPC] tracker-add")
     log_debug(f"[RPC] Arguments: {arguments}")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     trackers = arguments.get('trackerAdd', [])
 
     if not ids:
@@ -266,7 +314,7 @@ def handle_tracker_remove(arguments: Dict) -> Dict:
     """Handle torrent-tracker-remove method (Transmission: trackerRemove)"""
     log_info(f"[RPC] tracker-remove")
     log_debug(f"[RPC] Arguments: {arguments}")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     tracker_ids = arguments.get('trackerRemove', [])
 
     if not ids:
@@ -300,7 +348,7 @@ def handle_tracker_replace(arguments: Dict) -> Dict:
     """Handle torrent-tracker-replace method (Transmission: trackerReplace)"""
     log_info(f"[RPC] tracker-replace")
     log_debug(f"[RPC] Arguments: {arguments}")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     tracker_replace = arguments.get('trackerReplace', [])
 
     if not ids:
@@ -332,7 +380,7 @@ def handle_torrent_rename_path(arguments: Dict) -> Dict:
     """Handle torrent-rename-path method"""
     log_info(f"[RPC] torrent-rename-path")
     log_debug(f"[RPC] Arguments: {arguments}")
-    ids = TransmissionTranslator.get_torrent_ids(arguments, qbt_client)
+    ids = TransmissionTranslator.get_torrent_ids(arguments, get_sorted_torrents())
     path = arguments.get('path', '')
     name = arguments.get('name', '')
 
@@ -427,7 +475,7 @@ def handle_session_get(arguments: Dict) -> Dict:
             'memory-bytes': 1024
         },
         'utp-enabled': True,
-        'version': '3.00 (qBittorrent bridge)'
+        'version': '4.0.6 (qBittorrent bridge)'
     }
 
 

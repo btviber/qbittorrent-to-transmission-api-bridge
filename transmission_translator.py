@@ -4,7 +4,7 @@ Transmission RPC to qBittorrent API Translation
 
 from typing import Dict, List, Optional
 from qbittorrent_client import QBittorrentClient
-from logging_utils import log_warning, log_error
+from logging_utils import log_warning, log_error, log_debug
 
 
 class TransmissionTranslator:
@@ -30,13 +30,18 @@ class TransmissionTranslator:
     }
 
     @staticmethod
-    def qbt_to_transmission_torrent(qbt_torrent: Dict, qbt_client: QBittorrentClient) -> Dict:
+    def qbt_to_transmission_torrent(qbt_torrent: Dict, qbt_client: QBittorrentClient, sequential_id: int) -> Dict:
         """Convert qBittorrent torrent to Transmission format"""
 
         torrent_hash = qbt_torrent['hash']
         properties = qbt_client.get_torrent_properties(torrent_hash)
         trackers = qbt_client.get_torrent_trackers(torrent_hash)
         files = qbt_client.get_torrent_files(torrent_hash)
+
+        log_debug(f"[FILES] Torrent {qbt_torrent.get('name', 'unknown')} (hash: {torrent_hash[:8]}...) returned {len(files)} file(s)")
+        if files:
+            for idx, f in enumerate(files):
+                log_debug(f"[FILES]   File {idx}: {f.get('name', 'unknown')} - size: {f.get('size', 0)}, priority: {f.get('priority', -1)}")
 
         # Calculate rates
         download_rate = qbt_torrent.get('dlspeed', 0)
@@ -87,16 +92,44 @@ class TransmissionTranslator:
                     'tier': tracker.get('tier', 0)
                 })
 
-        # Format files
-        file_stats = []
+        # Format files - Transmission has multiple related arrays
+        files_array = []        # name, length, bytesCompleted
+        file_stats = []         # bytesCompleted, wanted, priority
+        priorities_array = []   # just priority values
+        wanted_array = []       # just wanted values
+
         for idx, file in enumerate(files):
-            file_stats.append({
-                'bytesCompleted': int(file['size'] * file['progress']),
+            # Map qBittorrent priority to Transmission priority
+            # qBT: 0=do not download, 1=normal, 6/7=high
+            # Transmission: wanted (true/false), priority (-1=low, 0=normal, 1=high)
+            qbt_priority = file.get('priority', 1)
+            wanted = qbt_priority > 0  # priority 0 means do not download
+            if qbt_priority >= 6:
+                tr_priority = 1  # high
+            elif qbt_priority > 0:
+                tr_priority = 0  # normal
+            else:
+                tr_priority = 0  # unwanted files don't need priority
+
+            bytes_completed = int(file['size'] * file['progress'])
+
+            # files array - basic file info
+            files_array.append({
+                'bytesCompleted': bytes_completed,
                 'length': file['size'],
-                'name': file['name'],
-                'priority': 0,
-                'wanted': not file.get('is_seed', True)
+                'name': file['name']
             })
+
+            # fileStats array - per-file stats
+            file_stats.append({
+                'bytesCompleted': bytes_completed,
+                'wanted': wanted,
+                'priority': tr_priority
+            })
+
+            # Separate arrays for priorities and wanted
+            priorities_array.append(tr_priority)
+            wanted_array.append(wanted)
 
         # Build Transmission torrent object
         transmission_torrent = {
@@ -116,13 +149,13 @@ class TransmissionTranslator:
             'error': 0,
             'errorString': '',
             'eta': qbt_torrent.get('eta', -1) if qbt_torrent.get('eta', 8640000) != 8640000 else -1,
-            'files': file_stats,
+            'files': files_array,
             'fileStats': file_stats,
             'hashString': torrent_hash,
             'haveUnchecked': 0,
             'haveValid': qbt_torrent.get('completed', 0),
             'honorsSessionLimits': True,
-            'id': int(torrent_hash[:8], 16),  # Convert first 8 chars of hash to int
+            'id': sequential_id,  # Sequential ID (1, 2, 3, ...)
             'isFinished': qbt_torrent.get('progress', 0) >= 1.0,
             'isPrivate': properties.get('is_private', False),
             'isStalled': 'stalled' in qbt_torrent.get('state', ''),
@@ -151,7 +184,7 @@ class TransmissionTranslator:
             'pieces': '',
             'pieceCount': properties.get('nb_pieces', 0),
             'pieceSize': properties.get('piece_size', 0),
-            'priorities': [],
+            'priorities': priorities_array,
             'queuePosition': qbt_torrent.get('priority', 0),
             'rateDownload': download_rate,
             'rateUpload': upload_rate,
@@ -173,24 +206,36 @@ class TransmissionTranslator:
             'uploadLimit': qbt_torrent.get('up_limit', -1),
             'uploadLimited': qbt_torrent.get('up_limit', -1) > 0,
             'uploadRatio': ratio,
-            'wanted': [],
+            'wanted': wanted_array,
             'webseeds': [],
             'webseedsSendingToUs': 0
         }
 
+        log_debug(f"[ID] Generated torrent: {qbt_torrent.get('name', 'unknown')} -> sequential ID {sequential_id} (hash: {torrent_hash[:8]}..., literal ID {int(torrent_hash[:8], 16)})")
         return transmission_torrent
 
     @staticmethod
-    def get_torrent_ids(arguments: Dict, qbt_client: QBittorrentClient) -> Optional[List[str]]:
-        """Extract torrent IDs/hashes from Transmission request and convert to qBittorrent hashes"""
+    def get_torrent_ids(arguments: Dict, sorted_torrents: List[Dict]) -> Optional[List[str]]:
+        """Extract torrent IDs/hashes from Transmission request and convert to qBittorrent hashes
+
+        Transmission API accepts both:
+        1. Literal ID values (generated from hash)
+        2. Positional indices (1 = first torrent, 2 = second, etc.)
+        """
         ids = arguments.get('ids', [])
 
-        if not ids:
+        # Check if no IDs were specified (None or empty list/string)
+        # Don't use 'not ids' because 0 is falsy but valid!
+        if ids is None or ids == [] or ids == '':
             return None
 
+        # Handle special string cases
         if isinstance(ids, str):
             if ids == 'recently-active':
                 return None
+            ids = [ids]
+        # Handle single integer/number - convert to list
+        elif isinstance(ids, int) or (not isinstance(ids, list) and not isinstance(ids, str)):
             ids = [ids]
 
         # Convert Transmission IDs to qBittorrent hashes
@@ -201,24 +246,37 @@ class TransmissionTranslator:
                 # Normalize to lowercase as qBittorrent uses lowercase hashes
                 hashes.append(id_val.lower())
             else:
-                # It's a Transmission integer ID, need to find the corresponding hash
-                # Transmission ID is generated from first 8 chars of hash
+                # It's a Transmission integer ID
                 try:
                     target_id = int(id_val)
-                    # Get all torrents and find the one with matching ID
-                    torrents = qbt_client.get_torrents()
-                    for torrent in torrents:
+                    log_debug(f"[ID] Looking for Transmission ID {target_id}")
+
+                    # First, try to find by literal ID (hash-based)
+                    found = False
+                    for torrent in sorted_torrents:
                         torrent_hash = torrent['hash'].lower()
-                        # Reconstruct the Transmission ID from hash
                         transmission_id = int(torrent_hash[:8], 16)
+                        log_debug(f"[ID] Hash {torrent_hash[:8]}... -> Transmission ID {transmission_id}")
                         if transmission_id == target_id:
                             hashes.append(torrent_hash)
+                            log_debug(f"[ID] Match found by literal ID! Using hash: {torrent_hash}")
+                            found = True
                             break
-                    else:
-                        log_warning(f"Could not find torrent with Transmission ID {target_id}")
+
+                    # If not found by literal ID, try as positional index (1-based)
+                    if not found:
+                        if 1 <= target_id <= len(sorted_torrents):
+                            torrent_hash = sorted_torrents[target_id - 1]['hash'].lower()
+                            hashes.append(torrent_hash)
+                            log_debug(f"[ID] Match found by position {target_id}! Using hash: {torrent_hash}")
+                        else:
+                            log_warning(f"Could not find torrent with Transmission ID {target_id} (neither as literal ID nor position)")
+
                 except (ValueError, TypeError) as e:
                     log_error(f"Error converting ID {id_val}: {e}")
-                    # Try using it as-is as a fallback
-                    hashes.append(str(id_val).lower())
+                    # Don't add invalid IDs to the list
 
-        return hashes if hashes else None
+        # Return the list of found hashes
+        # Empty list means IDs were requested but none found (return no torrents)
+        # None means no IDs were requested (return all)
+        return hashes
