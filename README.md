@@ -40,3 +40,20 @@ python3 bridge.py --port 9092
 1. Enable qBittorrent Web UI
 2. Run the bridge
 3. Point your Transmission app to `http://localhost:9091`
+
+## Compatibility
+
+### ✅ Working
+- Listing torrents
+- Adding torrents
+- Renaming torrent/files
+- Setting priority
+- Listing trackers
+- Editing trackers
+- Server stats
+- Querying free space
+
+### ❌ Not Working
+- Torrent settings (ratio, speed/peer limits, etc)
+- Server settings (ratio, ports, speed/altspeed/peer/etc limits, encryption, etc)
+- Everything else not listed in the working list
