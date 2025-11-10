@@ -256,8 +256,46 @@ def handle_torrent_set(arguments: Dict) -> Dict:
             qbt_client.set_file_priority(torrent_hash, file_indices, 1)  # 1 = normal
             sync_manager.invalidate_torrent_details(torrent_hash)  # Invalidate cache
 
+    # Handle speed limits
+    # Transmission uses KB/s, qBittorrent uses bytes/s
+    if 'uploadLimit' in arguments:
+        upload_limit_kb = arguments['uploadLimit']  # KB/s
+        upload_limit_bytes = upload_limit_kb * 1024  # Convert to bytes/s
+        log_debug(f"[RPC] uploadLimit detected: {upload_limit_kb} KB/s ({upload_limit_bytes} bytes/s)")
+        qbt_client.set_upload_limit(ids, upload_limit_bytes)
+
+    if 'downloadLimit' in arguments:
+        download_limit_kb = arguments['downloadLimit']  # KB/s
+        download_limit_bytes = download_limit_kb * 1024  # Convert to bytes/s
+        log_debug(f"[RPC] downloadLimit detected: {download_limit_kb} KB/s ({download_limit_bytes} bytes/s)")
+        qbt_client.set_download_limit(ids, download_limit_bytes)
+
+    # Handle speed limit checkboxes (enable/disable limits)
+    if 'uploadLimited' in arguments:
+        upload_limited = arguments['uploadLimited']
+        log_debug(f"[RPC] uploadLimited detected: {upload_limited}")
+        if upload_limited:
+            # Enable limit: set to 1 KB/s (1024 bytes/s) as minimum
+            qbt_client.set_upload_limit(ids, 1024)
+        else:
+            # Disable limit: set to 0 (unlimited)
+            qbt_client.set_upload_limit(ids, 0)
+
+    if 'downloadLimited' in arguments:
+        download_limited = arguments['downloadLimited']
+        log_debug(f"[RPC] downloadLimited detected: {download_limited}")
+        if download_limited:
+            # Enable limit: set to 1 KB/s (1024 bytes/s) as minimum
+            qbt_client.set_download_limit(ids, 1024)
+        else:
+            # Disable limit: set to 0 (unlimited)
+            qbt_client.set_download_limit(ids, 0)
+
+    # Note: honorSessionLimits is always true in qBittorrent (always honors global limits)
+    # No need to handle it explicitly
+
     # Handle other torrent-set operations
-    # TODO: Implement other settings like speed limits, peer limits, etc.
+    # TODO: Implement other settings like peer limits, ratio limits, etc.
 
     return {}
 

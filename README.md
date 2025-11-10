@@ -47,13 +47,15 @@ python3 bridge.py --port 9092
 - Listing torrents
 - Adding torrents
 - Renaming torrent/files
+- Moving files location
 - Setting priority
 - Listing trackers
 - Editing trackers
 - Server stats
 - Querying free space
+- Partial torrent settings (speed limits)
 
 ### ❌ Not Working
-- Torrent settings (ratio, speed/peer limits, etc)
+- Torrent settings (ratio, peer limits, etc)
 - Server settings (ratio, ports, speed/altspeed/peer/etc limits, encryption, etc)
 - Everything else not listed in the working list

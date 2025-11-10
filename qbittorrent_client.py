@@ -324,6 +324,46 @@ class QBittorrentClient:
             log_error(f"[QBT] Failed to set file priority: {response.status_code} - {response.text}")
         return response.ok
 
+    def set_upload_limit(self, hashes: List[str], limit: int) -> bool:
+        """Set upload speed limit for torrents
+
+        Args:
+            hashes: List of torrent hashes
+            limit: Upload limit in bytes/s (0 = no limit)
+        """
+        self.login()
+        hash_string = "|".join(hashes)
+        log_debug(f"[QBT] Setting upload limit for torrents {hash_string} to {limit} bytes/s")
+        response = self.session.post(
+            f"{self.url}/api/v2/torrents/setUploadLimit",
+            data={"hashes": hash_string, "limit": limit}
+        )
+        if response.ok:
+            log_debug(f"[QBT] Successfully set upload limit for {len(hashes)} torrent(s)")
+        else:
+            log_error(f"[QBT] Failed to set upload limit: {response.status_code} - {response.text}")
+        return response.ok
+
+    def set_download_limit(self, hashes: List[str], limit: int) -> bool:
+        """Set download speed limit for torrents
+
+        Args:
+            hashes: List of torrent hashes
+            limit: Download limit in bytes/s (0 = no limit)
+        """
+        self.login()
+        hash_string = "|".join(hashes)
+        log_debug(f"[QBT] Setting download limit for torrents {hash_string} to {limit} bytes/s")
+        response = self.session.post(
+            f"{self.url}/api/v2/torrents/setDownloadLimit",
+            data={"hashes": hash_string, "limit": limit}
+        )
+        if response.ok:
+            log_debug(f"[QBT] Successfully set download limit for {len(hashes)} torrent(s)")
+        else:
+            log_error(f"[QBT] Failed to set download limit: {response.status_code} - {response.text}")
+        return response.ok
+
     def get_transfer_info(self) -> Dict:
         """Get transfer and server statistics"""
         self.login()

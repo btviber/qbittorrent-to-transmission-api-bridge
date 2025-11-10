@@ -170,7 +170,7 @@ class TransmissionTranslator:
             'doneDate': int(qbt_torrent.get('completion_on', 0)),
             'downloadDir': qbt_torrent.get('save_path', ''),
             'downloadedEver': downloaded,
-            'downloadLimit': qbt_torrent.get('dl_limit', -1),
+            'downloadLimit': qbt_torrent.get('dl_limit', -1) // 1024 if qbt_torrent.get('dl_limit', -1) > 0 else qbt_torrent.get('dl_limit', -1),  # Convert bytes/s to KB/s
             'downloadLimited': qbt_torrent.get('dl_limit', -1) > 0,
             'error': 0,
             'errorString': '',
@@ -180,7 +180,7 @@ class TransmissionTranslator:
             'hashString': torrent_hash,
             'haveUnchecked': 0,
             'haveValid': qbt_torrent.get('completed', 0),
-            'honorsSessionLimits': True,
+            'honorsSessionLimits': True,  # qBittorrent always honors global limits
             'id': sequential_id,  # Sequential ID (1, 2, 3, ...)
             'isFinished': qbt_torrent.get('progress', 0) >= 1.0,
             'isPrivate': properties.get('is_private', False),
@@ -229,7 +229,7 @@ class TransmissionTranslator:
             'totalSize': qbt_torrent.get('size', 0),
             'torrentFile': '',
             'uploadedEver': uploaded,
-            'uploadLimit': qbt_torrent.get('up_limit', -1),
+            'uploadLimit': qbt_torrent.get('up_limit', -1) // 1024 if qbt_torrent.get('up_limit', -1) > 0 else qbt_torrent.get('up_limit', -1),  # Convert bytes/s to KB/s
             'uploadLimited': qbt_torrent.get('up_limit', -1) > 0,
             'uploadRatio': ratio,
             'wanted': wanted_array,
